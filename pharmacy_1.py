@@ -2,7 +2,7 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-import os
+from datetime import datetime
 from PIL import Image
 
 try:
@@ -10,38 +10,30 @@ try:
 except ImportError:
     decode = None
 
-st.set_page_config(page_title="نظام الصيدلية ونقاط البيع", layout="wide")
+st.set_page_config(
+    page_title="نظام نقاط البيع - صيدلية الأمل",
+    layout="wide"
+)
 
-REMOTE_DB_PATH = 'pharmacy_system.db'
 LOCAL_DB_PATH = 'local_pharmacy.db'
 
-def scan_barcode_from_image(image_file):
-    """قراءة الباركود تلقائياً من الكاميرا"""
-    if decode is None or image_file is None:
-        return None
-    try:
-        img = Image.open(image_file)
-        decoded_objs = decode(img)
-        for obj in decoded_objs:
-            return obj.data.decode('utf-8')
-    except Exception:
-        return None
-    return None
-
-def get_active_connection():
-    try:
-        conn = sqlite3.connect(REMOTE_DB_PATH, timeout=2)
-        conn.execute("SELECT 1")
-        return conn, "online"
-    except Exception:
-        conn = sqlite3.connect(LOCAL_DB_PATH)
-        return conn, "offline"
+def get_connection():
+    return sqlite3.connect(LOCAL_DB_PATH)
 
 def init_local_db():
-    conn = sqlite3.connect(LOCAL_DB_PATH)
+    conn = get_connection()
     c = conn.cursor()
     c.execute('''
-        CREATE TABLE IF NOT EXISTS pending_transactions (
+        CREATE TABLE IF NOT EXISTS products (
+            barcode TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            buy_price REAL,
+            sell_price REAL,
+            stock_quantity INTEGER
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pharmacy_name TEXT,
             type TEXT,
@@ -58,55 +50,22 @@ def init_local_db():
 
 init_local_db()
 
-# اختيار الفرع
-st.sidebar.title("🏥 إعدادات الصيدلية")
-conn_test, mode = get_active_connection()
-if mode == "online":
+def scan_barcode_from_image(image_file):
+    if decode is None or image_file is None:
+        return None
     try:
-        pharmacies_df = pd.read_sql("SELECT name FROM pharmacies", conn_test)
-        pharmacy_list = pharmacies_df['name'].tolist()
+        img = Image.open(image_file)
+        decoded_objs = decode(img)
+        for obj in decoded_objs:
+            return obj.data.decode('utf-8')
     except Exception:
-        pharmacy_list = ["صيدلية المركز"]
-    conn_test.close()
-else:
-    pharmacy_list = ["صيدلية المركز"]
+        return None
+    return None
 
-CURRENT_PHARMACY = st.sidebar.selectbox("اختر الفرع الحالي:", pharmacy_list)
-
-st.sidebar.divider()
-st.sidebar.title("📶 حالة الاتصال")
-if mode == "online":
-    st.sidebar.success("🌐 الاتصال بالشبكة: **أونلاين (متصل)**")
-else:
-    st.sidebar.warning("📡 الاتصال بالشبكة: **أوفلاين (مقطوع)**")
-
-if st.sidebar.button("🔄 سحب ومزامنة المبيعات المعلقة"):
-    try:
-        remote_conn = sqlite3.connect(REMOTE_DB_PATH, timeout=5)
-        local_conn = sqlite3.connect(LOCAL_DB_PATH)
-        
-        pending_df = pd.read_sql("SELECT * FROM pending_transactions", local_conn)
-        if not pending_df.empty:
-            for _, row in pending_df.iterrows():
-                remote_conn.execute("""
-                    INSERT INTO transactions (pharmacy_name, type, barcode, product_name, quantity, amount, cost_amount, date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (row['pharmacy_name'], row['type'], row['barcode'], row['product_name'], row['quantity'], row['amount'], row['cost_amount'], row['date']))
-            
-            remote_conn.commit()
-            local_conn.execute("DELETE FROM pending_transactions")
-            local_conn.commit()
-            st.sidebar.success(f"✅ تم تزامن {len(pending_df)} عملية بنجاح!")
-        else:
-            st.sidebar.info("لا توجد عمليات معلقة للمزامنة.")
-            
-        remote_conn.close()
-        local_conn.close()
-    except Exception as e:
-        st.sidebar.error(f"فشلت المزامنة: ({e})")
+CURRENT_PHARMACY = "صيدلية الأمل"
 
 st.title(f"🏥 {CURRENT_PHARMACY}")
-st.caption("نظام نقاط البيع والمخزون الداخلي المباشر")
+st.caption("نظام المبيعات والمخزون المباشر")
 
 if 'active_tab' not in st.session_state:
     st.session_state.active_tab = "sale"
@@ -122,22 +81,18 @@ with col3:
     if st.button("📊 الجرد الحالي", use_container_width=True):
         st.session_state.active_tab = "inventory"
 with col4:
-    if st.button("💵 حركة الصندوق", use_container_width=True):
-        st.session_state.active_tab = "cash"
+    if st.button("📤 تصدير للإدارة", use_container_width=True):
+        st.session_state.active_tab = "export"
 
 st.divider()
-conn, conn_mode = get_active_connection()
+conn = get_connection()
 
-# ----------------- 1️⃣ شاشة البيع -----------------
 if st.session_state.active_tab == "sale":
     st.subheader("🛍️ تسجيل عملية بيع")
-    try:
-        products = pd.read_sql("SELECT barcode, name, sell_price, buy_price, stock_quantity FROM products", conn)
-    except Exception:
-        products = pd.DataFrame(columns=['barcode', 'name', 'sell_price', 'buy_price', 'stock_quantity'])
+    products = pd.read_sql("SELECT barcode, name, sell_price, buy_price, stock_quantity FROM products", conn)
     
     if products.empty:
-        st.warning("لا توجد مواد مسجلة في المخزون حالياً.")
+        st.warning("⚠️ لا توجد مواد مسجلة في مخزون هذه الصيدلية. يرجى إضافة مواد من تبويب (📦 إدخال مواد جديدة) أولاً.")
     else:
         search_type = st.radio("طريقة الاختيار:", ["📷 كاميرا التابلت", "📟 قارئ الباركود", "🔎 البحث بالاسم"], horizontal=True)
         selected_prod = None
@@ -174,28 +129,16 @@ if st.session_state.active_tab == "sale":
             
             st.write(f"### المبلغ الإجمالي: **{total_amount:,.2f} $**")
             
-            if st.button("✅ تأكيد البيع وإصدار الفاتورة", type="primary"):
-                if conn_mode == "online":
-                    conn.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE barcode = ?", (qty, selected_prod['barcode']))
-                    conn.execute("""
-                        INSERT INTO transactions (pharmacy_name, type, barcode, product_name, quantity, amount, cost_amount)
-                        VALUES (?, 'بيع', ?, ?, ?, ?, ?)
-                    """, (CURRENT_PHARMACY, selected_prod['barcode'], selected_prod['name'], qty, total_amount, total_cost))
-                    conn.commit()
-                    st.success("تم تسجيل البيع بنجاح أونلاين!")
-                else:
-                    conn.execute("""
-                        INSERT INTO pending_transactions (pharmacy_name, type, barcode, product_name, quantity, amount, cost_amount)
-                        VALUES (?, 'بيع', ?, ?, ?, ?, ?)
-                    """, (CURRENT_PHARMACY, selected_prod['barcode'], selected_prod['name'], qty, total_amount, total_cost))
-                    conn.commit()
-                    st.warning("تم حفظ عملية البيع محلياً (أوفلاين).")
-                
-                msg = f"عملية بيع في {CURRENT_PHARMACY}%0Aالمنتج: {selected_prod['name']}%0Aالكمية: {qty}%0Aالمبلغ: {total_amount:,.2f} $"
-                whatsapp_url = f"https://wa.me/?text={msg}"
-                st.markdown(f"[📲 إرسال إشعار عبر WhatsApp]({whatsapp_url})", unsafe_allow_html=True)
+            if st.button("✅ تأكيد البيع وتسجيل الفاتورة", type="primary"):
+                conn.execute("UPDATE products SET stock_quantity = stock_quantity - ? WHERE barcode = ?", (qty, selected_prod['barcode']))
+                conn.execute("""
+                    INSERT INTO transactions (pharmacy_name, type, barcode, product_name, quantity, amount, cost_amount, date)
+                    VALUES (?, 'بيع', ?, ?, ?, ?, ?, ?)
+                """, (CURRENT_PHARMACY, selected_prod['barcode'], selected_prod['name'], qty, total_amount, total_cost, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                conn.commit()
+                st.success("🎉 تم تسجيل عملية البيع وخصم المادة من المخزون بنجاح!")
+                st.rerun()
 
-# ----------------- 2️⃣ شاشة إدخال المواد (الكاميرا / الماسح / اليدوي) -----------------
 elif st.session_state.active_tab == "add":
     st.subheader("📦 إضافة أدوية ومواد جديدة للمخزن")
     
@@ -208,15 +151,12 @@ elif st.session_state.active_tab == "add":
     scanned_barcode = ""
 
     if input_method == "📷 كاميرا التابلت":
-        st.info("وجه الكاميرا نحو باركود المنتج:")
         img_buffer = st.camera_input("التقط صورة الباركود")
         if img_buffer is not None:
             detected_code = scan_barcode_from_image(img_buffer)
             if detected_code:
                 scanned_barcode = detected_code
                 st.success(f"✅ الباركود الملتقط: **{scanned_barcode}**")
-            else:
-                st.error("لم يتم العثور على باركود واضح، يرجى إعادة المحاولة.")
 
     elif input_method == "📟 قارئ الباركود (Scanner)":
         scanned_barcode = st.text_input("امسح الباركود باستخدام الجهاز:", key="scanner_input_add")
@@ -231,64 +171,59 @@ elif st.session_state.active_tab == "add":
         sell_price = st.number_input("سعر البيع للمستهلك ($)", min_value=0.0, format="%.2f")
         quantity = st.number_input("الكمية المدخلة للمخزن", min_value=1, value=10)
         
-        submit_btn = st.form_submit_button("📥 إدخال مباشر إلى المخزن", type="primary")
+        submit_btn = st.form_submit_button("📥 حفظ في مخزون الصيدلية", type="primary")
 
         if submit_btn:
             if not final_barcode or not product_name:
                 st.error("يرجى كتابة الباركود واسم المادة.")
             else:
-                if conn_mode == "online":
-                    c = conn.cursor()
-                    c.execute("SELECT stock_quantity FROM products WHERE barcode = ?", (final_barcode,))
-                    existing = c.fetchone()
-                    
-                    if existing:
-                        conn.execute("""
-                            UPDATE products 
-                            SET stock_quantity = stock_quantity + ?, buy_price = ?, sell_price = ? 
-                            WHERE barcode = ?
-                        """, (quantity, buy_price, sell_price, final_barcode))
-                        st.success(f"🎉 تم زيادة كمية ({product_name}) بمقدار {quantity} بنجاح!")
-                    else:
-                        conn.execute("""
-                            INSERT INTO products (barcode, name, buy_price, sell_price, stock_quantity)
-                            VALUES (?, ?, ?, ?, ?)
-                        """, (final_barcode, product_name, buy_price, sell_price, quantity))
-                        st.success(f"🎉 تم إضافة المادة الجديدة ({product_name}) للمخزن بنجاح!")
-                    
+                c = conn.cursor()
+                c.execute("SELECT stock_quantity FROM products WHERE barcode = ?", (final_barcode,))
+                existing = c.fetchone()
+                
+                if existing:
                     conn.execute("""
-                        INSERT INTO transactions (pharmacy_name, type, barcode, product_name, quantity, amount, cost_amount)
-                        VALUES (?, 'شراء/إدخال', ?, ?, ?, ?, ?)
-                    """, (CURRENT_PHARMACY, final_barcode, product_name, quantity, quantity * buy_price, quantity * buy_price))
-                    
-                    conn.commit()
+                        UPDATE products 
+                        SET stock_quantity = stock_quantity + ?, buy_price = ?, sell_price = ? 
+                        WHERE barcode = ?
+                    """, (quantity, buy_price, sell_price, final_barcode))
                 else:
-                    st.error("إضافة أدوية ومواد جديدة يتطلب الاتصال بالسيرفر (أونلاين).")
+                    conn.execute("""
+                        INSERT INTO products (barcode, name, buy_price, sell_price, stock_quantity)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (final_barcode, product_name, buy_price, sell_price, quantity))
+                
+                conn.execute("""
+                    INSERT INTO transactions (pharmacy_name, type, barcode, product_name, quantity, amount, cost_amount, date)
+                    VALUES (?, 'شراء/إدخال', ?, ?, ?, ?, ?, ?)
+                """, (CURRENT_PHARMACY, final_barcode, product_name, quantity, quantity * buy_price, quantity * buy_price, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                
+                conn.commit()
+                st.success(f"🎉 تم إدخال ({product_name}) للمخزون وتسجيل الحركة!")
 
-# ----------------- 3️⃣ شاشة الجرد -----------------
 elif st.session_state.active_tab == "inventory":
-    st.subheader("📊 الجرد الحالي للمخزون")
-    try:
-        df_inv = pd.read_sql("SELECT barcode AS 'الباركود', name AS 'اسم الدواء', sell_price AS 'سعر البيع', stock_quantity AS 'الكمية المتاحة' FROM products", conn)
-        st.dataframe(df_inv, use_container_width=True)
-    except Exception:
-        st.info("عرض الجرد الحالي يتطلب الاتصال بالمخزون الرئيسي.")
+    st.subheader("📊 المخزون الحالي بالفرع")
+    df_inv = pd.read_sql("SELECT barcode AS 'الباركود', name AS 'اسم الدواء', buy_price AS 'سعر الشراء', sell_price AS 'سعر البيع', stock_quantity AS 'الكمية المتاحة' FROM products", conn)
+    st.dataframe(df_inv, use_container_width=True)
 
-# ----------------- 4️⃣ شاشة الحركة المالية -----------------
-elif st.session_state.active_tab == "cash":
-    st.subheader(f"💵 حركة الصندوق الخاص بـ ({CURRENT_PHARMACY})")
-    if conn_mode == "online":
-        df_c = pd.read_sql("""
-            SELECT type AS 'نوع الحركة', product_name AS 'الصنف', quantity AS 'الكمية', amount AS 'المبلغ', date AS 'التاريخ'
-            FROM transactions WHERE pharmacy_name = ? ORDER BY date DESC
-        """, conn, params=[CURRENT_PHARMACY])
-    else:
-        df_c = pd.read_sql("""
-            SELECT type AS 'نوع الحركة', product_name AS 'الصنف', quantity AS 'الكمية', amount AS 'المبلغ', date AS 'التاريخ'
-            FROM pending_transactions ORDER BY date DESC
-        """, conn)
-        st.warning("⚠️ هذه الحركات مسجلة أوفلاين ولم تُرفع للسيرفر الرئيسي بعد.")
+elif st.session_state.active_tab == "export":
+    st.subheader("📤 تصدير سجل الحركة المالية إلى برنامج الإدارة")
+    st.info("قم بتنزيل ملف العمليات المحدث ثم رفعه في شاشة (دمج ومزامنة بيانات الفروع) لتظهر الأرباح في تطبيق الإدارة.")
     
-    st.dataframe(df_c, use_container_width=True)
+    df_export = pd.read_sql("SELECT * FROM transactions", conn)
+    
+    if not df_export.empty:
+        st.dataframe(df_export, use_container_width=True)
+        csv_data = df_export.to_csv(index=False).encode('utf-8')
+        
+        st.download_button(
+            label=f"⬇️ تنزيل سجل المبيعات والمشتريات لـ ({CURRENT_PHARMACY}) - CSV",
+            data=csv_data,
+            file_name=f"{CURRENT_PHARMACY}_transactions.csv",
+            mime="text/csv",
+            type="primary"
+        )
+    else:
+        st.warning("لا توجد حركات مسجلة حالياً للتصدير.")
 
 conn.close()
