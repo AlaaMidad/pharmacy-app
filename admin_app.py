@@ -152,8 +152,8 @@ if page == "📊 لوحة المراقبة والأرباح":
     st.dataframe(df_trans, use_container_width=True)
 
 elif page == "🔄 دمج ومزامنة بيانات الفروع":
-    st.header("🔄 استيراد ومزامنة العمليات المصدّرة من الفروع")
-    st.info("💡 نظرًا لأن كل تطبيق Streamlit يعمل داخل بيئة معزولة، يمكنك رفع ملف (CSV أو Excel) المصدّر من تطبيق الصيدلية للدمج الفوري مع الميزانية والتقارير.")
+    st.header("🔄 استيراد ومزامنة العمليات والمخزون من الفروع")
+    st.info("💡 رفع ملف العمليات سيقوم بتحديث **الأرباح والميزانية** وكذلك **المخزون العام والمنتجات المتاحة** تلقائياً.")
     
     uploaded_files = st.file_uploader(
         "اختر ملفات العمليات المصدّرة من الصيدليات:",
@@ -162,7 +162,7 @@ elif page == "🔄 دمج ومزامنة بيانات الفروع":
     )
     
     if uploaded_files:
-        if st.button("📥 دمج البيانات في السجل الرئيسي", type="primary"):
+        if st.button("📥 دمج البيانات وتحديث المخزون والميزانية", type="primary"):
             added_count = 0
             for uploaded_file in uploaded_files:
                 try:
@@ -181,16 +181,55 @@ elif page == "🔄 دمج ومزامنة بيانات الفروع":
                         cost_amt = float(row.get('cost_amount', 0.0))
                         trans_date = str(row.get('date', datetime.now()))
                         
+                        # 1️⃣ تسجيل الحركة المالية في سجل الحركات
                         conn.execute("""
                             INSERT INTO transactions (pharmacy_name, type, barcode, product_name, quantity, amount, cost_amount, date)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, (p_name, p_type, barcode, prod_name, qty, amt, cost_amt, trans_date))
+                        
+                        # 2️⃣ تحديث المخزون العام والمنتجات في الإدارة
+                        if barcode and prod_name:
+                            # حساب أسعار القطعة الواحدة
+                            unit_cost = cost_amt / qty if qty > 0 else 0.0
+                            unit_sell = amt / qty if qty > 0 else 0.0
+                            
+                            c = conn.cursor()
+                            c.execute("SELECT stock_quantity FROM products WHERE barcode = ?", (barcode,))
+                            existing = c.fetchone()
+                            
+                            if p_type in ['شراء/إدخال', 'إدخال']:
+                                if existing:
+                                    conn.execute("""
+                                        UPDATE products 
+                                        SET stock_quantity = stock_quantity + ?, buy_price = ?, sell_price = ?
+                                        WHERE barcode = ?
+                                    """, (qty, unit_cost, unit_sell, barcode))
+                                else:
+                                    conn.execute("""
+                                        INSERT INTO products (barcode, name, buy_price, sell_price, stock_quantity)
+                                        VALUES (?, ?, ?, ?, ?)
+                                    """, (barcode, prod_name, unit_cost, unit_sell, qty))
+                                    
+                            elif p_type == 'بيع':
+                                if existing:
+                                    conn.execute("""
+                                        UPDATE products 
+                                        SET stock_quantity = MAX(0, stock_quantity - ?)
+                                        WHERE barcode = ?
+                                    """, (qty, barcode))
+                                else:
+                                    # في حال تم رفع عملية بيع لم تكن أدخلت سابقاً كشراء
+                                    conn.execute("""
+                                        INSERT INTO products (barcode, name, buy_price, sell_price, stock_quantity)
+                                        VALUES (?, ?, ?, ?, 0)
+                                    """, (barcode, prod_name, unit_cost, unit_sell))
+                                    
                         added_count += 1
                 except Exception as e:
                     st.error(f"حدث خطأ أثناء معالجة الملف {uploaded_file.name}: {e}")
             
             conn.commit()
-            st.success(f"✅ تم دمج {added_count} حركات بنجاح! انتقل إلى لوحة الأداء لرؤية النتيجة المحدثة.")
+            st.success(f"✅ تم دمج {added_count} حركات وتحديث جدول المخزون العام والميزانية بنجاح!")
 
 elif page == "🏥 إدارة الصيدليات والفروع":
     st.header("🏥 إضافة وإدارة الصيدليات والفروع")
