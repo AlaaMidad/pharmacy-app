@@ -2,10 +2,14 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 
-st.set_page_config(page_title="لوحة الإدارة والمراقبة - شبكة الصيدليات", layout="wide")
+st.set_page_config(
+    page_title="لوحة الإدارة والمراقبة - شبكة الصيدليات",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 DB_PATH = 'pharmacy_system.db'
 
@@ -79,7 +83,7 @@ init_db()
 st.sidebar.title("🏢 قائمة الإدارة الموحدة")
 page = st.sidebar.radio("انتقل إلى:", [
     "📊 لوحة المراقبة والأرباح",
-    "🔄 سحب ومزامنة البيانات",
+    "🔄 دمج ومزامنة بيانات الفروع",
     "🏥 إدارة الصيدليات والفروع",
     "👨‍⚕️ إدارة الصيادلة والموظفين",
     "📁 مستندات وأرشيف الصيدليات",
@@ -88,32 +92,48 @@ page = st.sidebar.radio("انتقل إلى:", [
 
 conn = get_connection()
 
+# ----------------- 1️⃣ لوحة المراقبة والأرباح -----------------
 if page == "📊 لوحة المراقبة والأرباح":
     st.header("📊 لوحة الأداء المالي والمراقبة الشاملة")
+    
     branches = pd.read_sql("SELECT name FROM pharmacies", conn)['name'].tolist()
     selected_branch = st.selectbox("تصفية حسب الصيدلية:", ["جميع الصيدليات"] + branches)
     
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input("تاريخ البداية", datetime.now())
-    with col2:
-        end_date = st.date_input("تاريخ النهاية", datetime.now())
-        
-    query = "SELECT * FROM transactions WHERE DATE(date) BETWEEN ? AND ?"
-    params = [start_date, end_date]
+    show_all = st.checkbox("عرض جميع البيانات المسجلة (تجاهل فلتر التاريخ)", value=True)
+    
+    if not show_all:
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("تاريخ البداية", datetime.now() - timedelta(days=30))
+        with col2:
+            end_date = st.date_input("تاريخ النهاية", datetime.now() + timedelta(days=1))
+            
+        query = "SELECT * FROM transactions WHERE DATE(date) BETWEEN ? AND ?"
+        params = [str(start_date), str(end_date)]
+    else:
+        query = "SELECT * FROM transactions"
+        params = []
+
     if selected_branch != "جميع الصيدليات":
-        query += " AND pharmacy_name = ?"
+        if "WHERE" in query:
+            query += " AND pharmacy_name = ?"
+        else:
+            query += " WHERE pharmacy_name = ?"
         params.append(selected_branch)
         
     df_trans = pd.read_sql(query, conn, params=params)
-    sales_df = df_trans[df_trans['type'] == 'بيع']
-    purchases_df = df_trans[df_trans['type'].str.contains('شراء|إدخال', na=False)]
     
-    total_sales = sales_df['amount'].sum() if not sales_df.empty else 0
-    total_cost_of_sales = sales_df['cost_amount'].sum() if not sales_df.empty else 0
-    net_profit = total_sales - total_cost_of_sales
-    total_purchases = purchases_df['amount'].sum() if not purchases_df.empty else 0
-    
+    if not df_trans.empty:
+        sales_df = df_trans[df_trans['type'] == 'بيع']
+        purchases_df = df_trans[df_trans['type'].str.contains('شراء|إدخال', na=False)]
+        
+        total_sales = sales_df['amount'].sum() if not sales_df.empty else 0.0
+        total_cost_of_sales = sales_df['cost_amount'].sum() if not sales_df.empty else 0.0
+        net_profit = total_sales - total_cost_of_sales
+        total_purchases = purchases_df['amount'].sum() if not purchases_df.empty else 0.0
+    else:
+        total_sales = total_cost_of_sales = net_profit = total_purchases = 0.0
+
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("إجمالي المبيعات", f"{total_sales:,.2f} $")
     m2.metric("تكلفة المبيعات", f"{total_cost_of_sales:,.2f} $")
@@ -121,25 +141,60 @@ if page == "📊 لوحة المراقبة والأرباح":
     m4.metric("مشتريات/توريد جديد", f"{total_purchases:,.2f} $")
     
     st.divider()
+    
     if net_profit > 0:
         st.success(f"📈 النتيجة المالية: **رابحة** بمبلغ صافي **{net_profit:,.2f} $**")
     elif net_profit < 0:
         st.error(f"📉 النتيجة المالية: **خاسرة** بمبلغ **{abs(net_profit):,.2f} $**")
     else:
-        st.info("⚖️ النتيجة المالية: **متعادلة** (لا يوجد أرباح أو خسائر)")
+        st.info("⚖️ النتيجة المالية: **متعادلة** (لا يوجد سجل عمليات أرباح/خسائر)")
 
-    st.subheader("📋 تفاصيل الحركات المسجلة")
+    st.subheader("📋 تفاصيل الحركات والعمليات المسجلة")
     st.dataframe(df_trans, use_container_width=True)
 
-elif page == "🔄 سحب ومزامنة البيانات":
-    st.header("🔄 سحب ومزامنة بيانات الفروع")
-    st.info("تسمح هذه الشاشة بمراجعة وحالة الاتصال بالسيرفر الرئيسي وسحب أي حركات مسجلة أثناء فترة الانقطاع.")
-    branches = pd.read_sql("SELECT name FROM pharmacies", conn)['name'].tolist()
-    selected_p = st.selectbox("اختر الصيدلية للتحقق من المزامنة:", branches)
+# ----------------- 2️⃣ دمج ومزامنة البيانات -----------------
+elif page == "🔄 دمج ومزامنة بيانات الفروع":
+    st.header("🔄 استيراد ومزامنة العمليات المصدّرة من الفروع")
+    st.info("💡 نظرًا لأن كل تطبيق Streamlit يعمل داخل بيئة معزولة، يمكنك رفع ملف (CSV أو Excel) المصدّر من تطبيق الصيدلية للدمج الفوري مع الميزانية والتقارير.")
     
-    if st.button(f"📥 فحص وسحب البيانات المعلقة من {selected_p}", type="primary"):
-        st.success(f"تم فحص سجلات {selected_p}، جميع البيانات محدثة ومزامنة بالكامل مع السيرفر الرئيسي!")
+    uploaded_files = st.file_uploader(
+        "اختر ملفات العمليات المصدّرة من الصيدليات:",
+        type=["csv", "xlsx"],
+        accept_multiple_files=True
+    )
+    
+    if uploaded_files:
+        if st.button("📥 دمج البيانات في السجل الرئيسي", type="primary"):
+            added_count = 0
+            for uploaded_file in uploaded_files:
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        df_up = pd.read_csv(uploaded_file)
+                    else:
+                        df_up = pd.read_excel(uploaded_file)
+                        
+                    for _, row in df_up.iterrows():
+                        p_name = row.get('pharmacy_name', 'فرع غير محدد')
+                        p_type = row.get('type', 'بيع')
+                        barcode = str(row.get('barcode', ''))
+                        prod_name = row.get('product_name', 'منتج')
+                        qty = int(row.get('quantity', 1))
+                        amt = float(row.get('amount', 0.0))
+                        cost_amt = float(row.get('cost_amount', 0.0))
+                        trans_date = str(row.get('date', datetime.now()))
+                        
+                        conn.execute("""
+                            INSERT INTO transactions (pharmacy_name, type, barcode, product_name, quantity, amount, cost_amount, date)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (p_name, p_type, barcode, prod_name, qty, amt, cost_amt, trans_date))
+                        added_count += 1
+                except Exception as e:
+                    st.error(f"حدث خطأ أثناء معالجة الملف {uploaded_file.name}: {e}")
+            
+            conn.commit()
+            st.success(f"✅ تم دمج {added_count} حركات بنجاح! انتقل إلى لوحة الأداء لرؤية النتيجة المحدثة.")
 
+# ----------------- 3️⃣ إدارة الصيدليات والفروع -----------------
 elif page == "🏥 إدارة الصيدليات والفروع":
     st.header("🏥 إضافة وإدارة الصيدليات والفروع")
     with st.form("add_pharmacy_form"):
@@ -152,15 +207,16 @@ elif page == "🏥 إدارة الصيدليات والفروع":
                 conn.execute("INSERT INTO pharmacies (name, whatsapp_number, location) VALUES (?, ?, ?)",
                              (p_name, p_phone, p_loc))
                 conn.commit()
-                st.success(f"تمت إضافة {p_name} بنجاح! يمكن الآن تشغيل تطبيقها المخصص.")
+                st.success(f"تمت إضافة {p_name} بنجاح!")
                 st.rerun()
-            except:
+            except Exception:
                 st.error("اسم الصيدلية موجود مسبقاً.")
 
     st.subheader("قائمة الصيدليات المسجلة")
     df_p = pd.read_sql("SELECT name AS 'اسم الصيدلية', whatsapp_number AS 'رقم الواتساب', location AS 'الموقع' FROM pharmacies", conn)
     st.dataframe(df_p, use_container_width=True)
 
+# ----------------- 4️⃣ إدارة الصيادلة والموظفين -----------------
 elif page == "👨‍⚕️ إدارة الصيادلة والموظفين":
     st.header("👨‍⚕️ كادر العمل والصيادلة")
     branches = pd.read_sql("SELECT name FROM pharmacies", conn)['name'].tolist()
@@ -180,6 +236,7 @@ elif page == "👨‍⚕️ إدارة الصيادلة والموظفين":
     df_e = pd.read_sql("SELECT name AS 'الاسم', pharmacy_name AS 'الصيدلية', role AS 'الوظيفة', phone AS 'الهاتف' FROM employees", conn)
     st.dataframe(df_e, use_container_width=True)
 
+# ----------------- 5️⃣ مستندات وأرشيف الصيدليات -----------------
 elif page == "📁 مستندات وأرشيف الصيدليات":
     st.header("📁 أرشيف الوثائق والتراخيص")
     branches = pd.read_sql("SELECT name FROM pharmacies", conn)['name'].tolist()
@@ -192,3 +249,22 @@ elif page == "📁 مستندات وأرشيف الصيدليات":
         if submit and d_title and uploaded_file:
             if not os.path.exists("uploads"):
                 os.makedirs("uploads")
+            file_path = os.path.join("uploads", f"{d_branch}_{uploaded_file.name}")
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            conn.execute("INSERT INTO documents (pharmacy_name, doc_title, doc_type, upload_date, file_name) VALUES (?, ?, ?, ?, ?)",
+                         (d_branch, d_title, d_type, datetime.now().date(), uploaded_file.name))
+            conn.commit()
+            st.success("تم رفع المستند بنجاح!")
+
+    st.subheader("الأرشيف الحالي")
+    df_docs = pd.read_sql("SELECT pharmacy_name AS 'الصيدلية', doc_title AS 'العنوان', doc_type AS 'النوع', upload_date AS 'تاريخ الرفع' FROM documents", conn)
+    st.dataframe(df_docs, use_container_width=True)
+
+# ----------------- 6️⃣ المخزون العام والمنتجات -----------------
+elif page == "📦 المخزون العام والمنتجات":
+    st.header("📦 حالة المخزون الموحد")
+    df_stock = pd.read_sql("SELECT barcode AS 'الباركود', name AS 'اسم المنتج', buy_price AS 'سعر الشراء', sell_price AS 'سعر البيع', stock_quantity AS 'الكمية المتاحة' FROM products", conn)
+    st.dataframe(df_stock, use_container_width=True)
+
+conn.close()
