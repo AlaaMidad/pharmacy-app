@@ -92,7 +92,6 @@ page = st.sidebar.radio("انتقل إلى:", [
 
 conn = get_connection()
 
-# ----------------- 1️⃣ لوحة المراقبة والأرباح -----------------
 if page == "📊 لوحة المراقبة والأرباح":
     st.header("📊 لوحة الأداء المالي والمراقبة الشاملة")
     
@@ -152,7 +151,6 @@ if page == "📊 لوحة المراقبة والأرباح":
     st.subheader("📋 تفاصيل الحركات والعمليات المسجلة")
     st.dataframe(df_trans, use_container_width=True)
 
-# ----------------- 2️⃣ دمج ومزامنة البيانات -----------------
 elif page == "🔄 دمج ومزامنة بيانات الفروع":
     st.header("🔄 استيراد ومزامنة العمليات المصدّرة من الفروع")
     st.info("💡 نظرًا لأن كل تطبيق Streamlit يعمل داخل بيئة معزولة، يمكنك رفع ملف (CSV أو Excel) المصدّر من تطبيق الصيدلية للدمج الفوري مع الميزانية والتقارير.")
@@ -194,7 +192,6 @@ elif page == "🔄 دمج ومزامنة بيانات الفروع":
             conn.commit()
             st.success(f"✅ تم دمج {added_count} حركات بنجاح! انتقل إلى لوحة الأداء لرؤية النتيجة المحدثة.")
 
-# ----------------- 3️⃣ إدارة الصيدليات والفروع -----------------
 elif page == "🏥 إدارة الصيدليات والفروع":
     st.header("🏥 إضافة وإدارة الصيدليات والفروع")
     with st.form("add_pharmacy_form"):
@@ -216,7 +213,6 @@ elif page == "🏥 إدارة الصيدليات والفروع":
     df_p = pd.read_sql("SELECT name AS 'اسم الصيدلية', whatsapp_number AS 'رقم الواتساب', location AS 'الموقع' FROM pharmacies", conn)
     st.dataframe(df_p, use_container_width=True)
 
-# ----------------- 4️⃣ إدارة الصيادلة والموظفين -----------------
 elif page == "👨‍⚕️ إدارة الصيادلة والموظفين":
     st.header("👨‍⚕️ كادر العمل والصيادلة")
     branches = pd.read_sql("SELECT name FROM pharmacies", conn)['name'].tolist()
@@ -236,7 +232,6 @@ elif page == "👨‍⚕️ إدارة الصيادلة والموظفين":
     df_e = pd.read_sql("SELECT name AS 'الاسم', pharmacy_name AS 'الصيدلية', role AS 'الوظيفة', phone AS 'الهاتف' FROM employees", conn)
     st.dataframe(df_e, use_container_width=True)
 
-# ----------------- 5️⃣ مستندات وأرشيف الصيدليات -----------------
 elif page == "📁 مستندات وأرشيف الصيدليات":
     st.header("📁 أرشيف الوثائق والتراخيص")
     branches = pd.read_sql("SELECT name FROM pharmacies", conn)['name'].tolist()
@@ -261,7 +256,6 @@ elif page == "📁 مستندات وأرشيف الصيدليات":
     df_docs = pd.read_sql("SELECT pharmacy_name AS 'الصيدلية', doc_title AS 'العنوان', doc_type AS 'النوع', upload_date AS 'تاريخ الرفع' FROM documents", conn)
     st.dataframe(df_docs, use_container_width=True)
 
-# ----------------- 6️⃣ المخزون العام والمنتجات -----------------
 elif page == "📦 المخزون العام والمنتجات":
     st.header("📦 حالة المخزون الموحد")
     df_stock = pd.read_sql("SELECT barcode AS 'الباركود', name AS 'اسم المنتج', buy_price AS 'سعر الشراء', sell_price AS 'سعر البيع', stock_quantity AS 'الكمية المتاحة' FROM products", conn)
